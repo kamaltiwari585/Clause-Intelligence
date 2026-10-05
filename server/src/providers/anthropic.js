@@ -13,7 +13,7 @@ export const anthropic = {
         messages: [{ role: 'user', content: prompt }],
       }),
     });
-    if (!res.ok) throw new Error(`Anthropic request failed (${res.status})`);
+    if (!res.ok) throw Object.assign(new Error(`Anthropic request failed (${res.status})`), { status: res.status });
     const data = await res.json();
     return data.content?.filter((b) => b.type === 'text').map((b) => b.text).join('') ?? '';
   },

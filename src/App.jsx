@@ -44,8 +44,9 @@ export default function App() {
               </div>
               {live ? (
                 <div className="notice banner">
-                  <span>Showing AI analysis of <strong>{live.contract.name}</strong> (reviewed for the {live.meta.perspective}, using {live.meta.provider}). Earlier rows are sample data.
-                    {live.warnings.length > 0 && ` ${live.warnings.length} unverified finding(s) were removed.`}</span>
+                  <span>Showing analysis of <strong>{live.contract.name}</strong>. Reviewed for the {live.meta.perspective}. Earlier rows are sample data.
+                    {live.warnings.length > 0 && ` ${live.warnings.length} unverified finding(s) were removed.`}
+                    {live.meta.engine !== 'ai' && ` ${live.meta.fallbackReason ?? 'AI analysis was unavailable'}, so built-in rule-based checks were used${live.meta.engine === 'hybrid' ? ` for ${live.meta.fallbackChunks} of ${live.meta.totalChunks} sections` : ''}. They are less detailed: retry later for the full AI review.`}</span>
                   <button type="button" className="btn" onClick={analysis.reset}>Back to sample data</button>
                 </div>
               ) : (

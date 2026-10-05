@@ -13,7 +13,10 @@ function Detail({ clause }) {
           <h3 className="detail__title">{clause.title}</h3>
           <div className="detail__section">Section {clause.section}</div>
         </div>
-        <RiskBadge level={clause.risk} />
+        <div className="detail__tags">
+          <RiskBadge level={clause.risk} />
+          {clause.source === 'rules' && <span className="tag" title="Found by built-in rules, not AI">Rule-based</span>}
+        </div>
       </header>
 
       <dl className="flags">

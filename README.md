@@ -35,3 +35,6 @@ npm run dev
 ```
 Flow: upload -> extract text -> chunk -> LLM (JSON) -> validate (drops quotes not found in the contract) -> UI.
 Swap providers via `LLM_PROVIDER`. Add one in `server/src/providers/`. Keys live only in `server/.env`.
+
+### Resilience
+Gemini calls retry with backoff, then try `GEMINI_FALLBACK_MODELS`, then fall back to the built-in rule engine (`server/src/services/ruleEngine.js`). Set `LLM_PROVIDER=rules` to run without AI.

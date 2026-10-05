@@ -2,7 +2,9 @@ import { config } from '../config.js';
 import { gemini } from './gemini.js';
 import { anthropic } from './anthropic.js';
 
-const PROVIDERS = { gemini, anthropic };
+// 'rules' = no AI at all: the built-in rule engine only (offline / zero cost).
+const rules = { name: 'rules', model: () => 'rule-engine', generateJson: async () => { throw new Error('rules-only mode'); } };
+const PROVIDERS = { gemini, anthropic, rules };
 
 /** Provider contract: { name, model(), generateJson({system, prompt}) -> string }. Add a provider = add a file + one line here. */
 export function getProvider(name = config.provider) {

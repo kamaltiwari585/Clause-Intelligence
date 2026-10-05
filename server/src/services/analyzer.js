@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import { createLogger } from '../logger.js';
 import { SYSTEM_PROMPT, buildPrompt } from '../prompts.js';
 import { parseModelJson, normalizeAnalysis } from '../validate.js';
+import { analyzeWithRules } from './ruleEngine.js';
 
 const log = createLogger('analyzer');
 
@@ -16,21 +17,36 @@ export function chunkText(text, size) {
   return chunks;
 }
 
+const friendlyReason = (err) => {
+  if ([429, 500, 502, 503, 504].includes(err.status)) return 'The AI service was busy or unavailable';
+  if (err.status === 404) return 'The configured AI model is not available';
+  if (err.status === 401 || err.status === 403) return 'The AI key was rejected';
+  return 'The AI service returned an unusable response';
+};
+
+/** AI first; on any failure, fall back to the rule engine so the user always gets a result. */
 async function analyzeChunk(provider, chunk, perspective, index, total) {
   const started = Date.now();
-  let raw;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      raw = parseModelJson(await provider.generateJson({ system: SYSTEM_PROMPT, prompt: buildPrompt({ chunk, perspective, index, total }) }));
-      break;
-    } catch (err) {
-      log.warn(`chunk ${index + 1}/${total} attempt ${attempt} failed: ${err.message}`);
-      if (attempt === 2) throw new Error('The AI service returned an unusable response. Try again.');
+  const label = `chunk ${index + 1}/${total}`;
+  if (provider.name === 'rules') return { ...analyzeWithRules(chunk), source: 'rules', reason: 'Rule-based mode is selected' };
+  try {
+    let raw;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const text = await provider.generateJson({ system: SYSTEM_PROMPT, prompt: buildPrompt({ chunk, perspective, index, total }) });
+      try { raw = parseModelJson(text); break; } catch {
+        log.warn(`${label} invalid JSON (attempt ${attempt})`);
+        if (attempt === 2) throw new Error('Model returned invalid JSON');
+      }
     }
+    const result = normalizeAnalysis(raw, chunk);
+    log.info(`${label} done via AI`, { ms: Date.now() - started, clauses: result.clauses.length, warnings: result.warnings.length });
+    return { ...result, source: 'ai' };
+  } catch (err) {
+    log.error(`${label} AI failed, using rule engine: ${err.message}`);
+    const result = analyzeWithRules(chunk);
+    log.info(`${label} done via rules`, { ms: Date.now() - started, clauses: result.clauses.length });
+    return { ...result, source: 'rules', reason: friendlyReason(err) };
   }
-  const result = normalizeAnalysis(raw, chunk);
-  log.info(`chunk ${index + 1}/${total} done`, { ms: Date.now() - started, clauses: result.clauses.length, warnings: result.warnings.length });
-  return result;
 }
 
 export async function analyzeContract({ text, perspective, provider, fileName }) {
@@ -45,7 +61,7 @@ export async function analyzeContract({ text, perspective, provider, fileName })
   const missing = [...missingSets[0].entries()].filter(([k]) => missingSets.every((s) => s.has(k))).map(([, m]) => m);
 
   const seen = new Set();
-  const clauses = results.flatMap((r) => r.clauses).filter((c) => {
+  const clauses = results.flatMap((r) => r.clauses.map((c) => ({ ...c, source: r.source }))).filter((c) => {
     const key = `${c.title}|${c.section}`.toLowerCase();
     return seen.has(key) ? false : (seen.add(key), true);
   });
@@ -55,10 +71,12 @@ export async function analyzeContract({ text, perspective, provider, fileName })
     ...missing.map((m, i) => ({
       id: `m-${i + 1}`, title: m.title, section: 'Not present', risk: 'missing', oneSided: false, incomplete: true,
       text: '', issue: m.issue, negotiation: `Require a ${m.title} clause before signature.`, revision: m.revision,
+      source: results.every((r) => r.source === 'rules') ? 'rules' : 'ai',
     })),
   ];
   const high = all.filter((c) => c.risk === 'high').length;
   const moderate = all.filter((c) => c.risk === 'moderate').length;
+  const fallback = results.filter((r) => r.source === 'rules');
 
   return {
     contract: {
@@ -67,6 +85,10 @@ export async function analyzeContract({ text, perspective, provider, fileName })
     },
     clauses: all,
     warnings: results.flatMap((r) => r.warnings),
-    meta: { provider: provider.name, model: provider.model(), perspective },
+    meta: {
+      provider: provider.name, model: provider.model(), perspective,
+      engine: fallback.length === 0 ? 'ai' : fallback.length === results.length ? 'rules' : 'hybrid',
+      fallbackChunks: fallback.length, totalChunks: results.length, fallbackReason: fallback[0]?.reason ?? null,
+    },
   };
 }
