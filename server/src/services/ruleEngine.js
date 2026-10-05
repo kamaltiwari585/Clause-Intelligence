@@ -72,12 +72,12 @@ const TEMPLATES = {
 /** Split into reviewable units, carrying the latest section number. Long walls of text are split into sentences. */
 function toUnits(text) {
   const units = []; let section = 'Unnumbered';
-  for (const para of text.split(/\n\s*\n/).map((s) => s.trim()).filter((s) => s.length > 30)) {
+  for (const para of text.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean)) {
     const parts = para.length > 1200 ? para.split(/(?<=[.;:])\s+(?=[A-Z0-9(])/) : [para];
     for (const part of parts) {
       const m = part.match(/^(?:section\s+)?(\d+(?:\.\d+)*)[.)]?\s/i);
-      if (m) section = m[1];
-      units.push({ text: part.slice(0, 700), section });
+      if (m) section = m[1]; // short headings like "12.3 Liability" still set the section
+      if (part.length > 30) units.push({ text: part.slice(0, 700), section });
     }
   }
   return units;
