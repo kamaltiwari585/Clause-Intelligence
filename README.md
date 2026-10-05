@@ -25,3 +25,13 @@ Logs are scoped (`[App]`, `[useClauseReview]`). Set the level via `VITE_LOG_LEVE
 
 ## Next
 Supabase storage for contracts, upload flow, and AI clause analysis that returns the same shape as `sampleData.js`.
+
+## Backend (v0.2)
+```bash
+cd server && npm install && cp .env.example .env   # add GEMINI_API_KEY (or set LLM_PROVIDER=anthropic)
+npm run dev          # API on :8787
+# in another terminal, from the repo root:
+npm run dev
+```
+Flow: upload -> extract text -> chunk -> LLM (JSON) -> validate (drops quotes not found in the contract) -> UI.
+Swap providers via `LLM_PROVIDER`. Add one in `server/src/providers/`. Keys live only in `server/.env`.
