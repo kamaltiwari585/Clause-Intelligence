@@ -3,6 +3,8 @@ import { createLogger } from '../logger.js';
 import { SYSTEM_PROMPT, buildPrompt } from '../prompts.js';
 import { parseModelJson, normalizeAnalysis } from '../validate.js';
 import { analyzeWithRules } from './ruleEngine.js';
+import { buildReview } from './review.js';
+import { findPage } from '../utils/text.js';
 
 const log = createLogger('analyzer');
 
@@ -24,71 +26,58 @@ const friendlyReason = (err) => {
   return 'The AI service returned an unusable response';
 };
 
-/** AI first; on any failure, fall back to the rule engine so the user always gets a result. */
-async function analyzeChunk(provider, chunk, perspective, index, total) {
+/** AI first; on any failure, fall back to the role-aware rule engine so the user always gets a result. */
+async function analyzeChunk(provider, chunk, role, index, total) {
   const started = Date.now();
   const label = `chunk ${index + 1}/${total}`;
-  if (provider.name === 'rules') return { ...analyzeWithRules(chunk), source: 'rules', reason: 'Rule-based mode is selected' };
+  if (provider.name === 'rules') return { ...analyzeWithRules(chunk, role), source: 'rules', reason: 'Rule-based mode is selected' };
   try {
     let raw;
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const text = await provider.generateJson({ system: SYSTEM_PROMPT, prompt: buildPrompt({ chunk, perspective, index, total }) });
-      try { raw = parseModelJson(text); break; } catch {
+      const out = await provider.generateJson({ system: SYSTEM_PROMPT, prompt: buildPrompt({ chunk, role, index, total }) });
+      try { raw = parseModelJson(out); break; } catch {
         log.warn(`${label} invalid JSON (attempt ${attempt})`);
         if (attempt === 2) throw new Error('Model returned invalid JSON');
       }
     }
     const result = normalizeAnalysis(raw, chunk);
-    log.info(`${label} done via AI`, { ms: Date.now() - started, clauses: result.clauses.length, warnings: result.warnings.length });
+    log.info(`${label} done via AI`, { ms: Date.now() - started, findings: result.findings.length, warnings: result.warnings.length });
     return { ...result, source: 'ai' };
   } catch (err) {
     log.error(`${label} AI failed, using rule engine: ${err.message}`);
-    const result = analyzeWithRules(chunk);
-    log.info(`${label} done via rules`, { ms: Date.now() - started, clauses: result.clauses.length });
+    const result = analyzeWithRules(chunk, role);
+    log.info(`${label} done via rules`, { ms: Date.now() - started, findings: result.findings.length });
     return { ...result, source: 'rules', reason: friendlyReason(err) };
   }
 }
 
-export async function analyzeContract({ text, perspective, provider, fileName }) {
+export async function analyzeContract({ text, pages = null, role, provider, fileName }) {
   const chunks = chunkText(text, config.chunkChars);
-  log.info('analysis started', { provider: provider.name, model: provider.model(), chunks: chunks.length, chars: text.length });
+  log.info('analysis started', { provider: provider.name, model: provider.model(), role, chunks: chunks.length, chars: text.length, pages: pages?.length ?? null });
 
   const results = [];
-  for (let i = 0; i < chunks.length; i++) results.push(await analyzeChunk(provider, chunks[i], perspective, i, chunks.length));
+  for (let i = 0; i < chunks.length; i++) results.push(await analyzeChunk(provider, chunks[i], role, i, chunks.length));
 
-  // A clause is only "missing" if EVERY chunk reports it missing.
-  const missingSets = results.map((r) => new Map(r.missing.map((m) => [m.title.toLowerCase(), m])));
-  const missing = [...missingSets[0].entries()].filter(([k]) => missingSets.every((s) => s.has(k))).map(([, m]) => m);
+  // A protection is only "missing" if EVERY chunk reports it missing.
+  const sets = results.map((r) => new Map(r.missing.map((m) => [m.title.toLowerCase(), m])));
+  const missing = [...sets[0].entries()].filter(([k]) => sets.every((s) => s.has(k))).map(([, m]) => m);
 
   const seen = new Set();
-  const clauses = results.flatMap((r) => r.clauses.map((c) => ({ ...c, source: r.source }))).filter((c) => {
-    const key = `${c.title}|${c.section}`.toLowerCase();
+  const findings = results.flatMap((r) => r.findings.map((f) => ({ ...f, source: r.source }))).filter((f) => {
+    const key = `${f.title}|${f.section}`.toLowerCase();
     return seen.has(key) ? false : (seen.add(key), true);
-  });
+  }).map((f) => ({ ...f, page: findPage(pages, f.text) }));
 
-  const all = [
-    ...clauses.map((c, i) => ({ id: `a-${i + 1}`, ...c })),
-    ...missing.map((m, i) => ({
-      id: `m-${i + 1}`, title: m.title, section: 'Not present', risk: 'missing', oneSided: false, incomplete: true,
-      text: '', issue: m.issue, negotiation: `Require a ${m.title} clause before signature.`, revision: m.revision,
-      source: results.every((r) => r.source === 'rules') ? 'rules' : 'ai',
-    })),
-  ];
-  const high = all.filter((c) => c.risk === 'high').length;
-  const moderate = all.filter((c) => c.risk === 'moderate').length;
   const fallback = results.filter((r) => r.source === 'rules');
+  const first = (k) => results.map((r) => r[k]).find((v) => (Array.isArray(v) ? v.length : v)) ?? (k === 'parties' ? [] : '');
 
-  return {
-    contract: {
-      id: `u-${Date.now()}`, name: fileName, type: 'Uploaded contract', reviewedOn: new Date().toISOString().slice(0, 10),
-      high, moderate, status: high ? 'Needs Negotiation' : moderate || missing.length ? 'In Review' : 'Cleared',
-    },
-    clauses: all,
-    warnings: results.flatMap((r) => r.warnings),
+  return buildReview({
+    fileName, role, findings, missing, warnings: results.flatMap((r) => r.warnings),
+    overview: first('overview'), contractType: first('contractType'), parties: first('parties'),
     meta: {
-      provider: provider.name, model: provider.model(), perspective,
+      provider: provider.name, model: provider.model(),
       engine: fallback.length === 0 ? 'ai' : fallback.length === results.length ? 'rules' : 'hybrid',
       fallbackChunks: fallback.length, totalChunks: results.length, fallbackReason: fallback[0]?.reason ?? null,
     },
-  };
+  });
 }

@@ -38,3 +38,6 @@ Swap providers via `LLM_PROVIDER`. Add one in `server/src/providers/`. Keys live
 
 ### Resilience
 Gemini calls retry with backoff, then try `GEMINI_FALLBACK_MODELS`, then fall back to the built-in rule engine (`server/src/services/ruleEngine.js`). Set `LLM_PROVIDER=rules` to run without AI.
+
+## v0.3: role-based review
+Upload -> pick Buyer/Client or Service Provider/Vendor -> findings are judged relative to that role (favourable / unfavourable / neutral), scored 0-100, with negotiation priorities. The rule-engine fallback is role-aware too.

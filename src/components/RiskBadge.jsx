@@ -1,5 +1,10 @@
-import { RISK_LABELS } from '../config/constants';
+import { SEVERITY_LABELS } from '../config/constants';
 
-export default function RiskBadge({ level }) {
-  return <span className={`badge badge--${level}`}>{RISK_LABELS[level] ?? level}</span>;
+/** One badge for every state: severity when unfavourable, otherwise favourable / neutral. */
+export default function RiskBadge({ finding }) {
+  if (finding.stance === 'favourable') return <span className="badge badge--favourable">Favourable</span>;
+  if (finding.stance === 'neutral') return <span className="badge badge--neutral">Neutral</span>;
+  return <span className={`badge badge--${finding.severity}`}>{SEVERITY_LABELS[finding.severity]}</span>;
 }
+
+export const toneOf = (f) => (f.stance === 'unfavourable' ? f.severity : f.stance);
